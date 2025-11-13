@@ -1,0 +1,5 @@
+D:\Projects\RPS\AsgardPark-Common\Vibe\ParkingEntry\ParkingEntry.Application\obj\Debug\net8.0\ParkingEntry.Application.csproj.AssemblyReference.cache
+D:\Projects\RPS\AsgardPark-Common\Vibe\ParkingEntry\ParkingEntry.Application\obj\Debug\net8.0\ParkingEntry.Application.GeneratedMSBuildEditorConfig.editorconfig
+D:\Projects\RPS\AsgardPark-Common\Vibe\ParkingEntry\ParkingEntry.Application\obj\Debug\net8.0\ParkingEntry.Application.AssemblyInfoInputs.cache
+D:\Projects\RPS\AsgardPark-Common\Vibe\ParkingEntry\ParkingEntry.Application\obj\Debug\net8.0\ParkingEntry.Application.AssemblyInfo.cs
+D:\Projects\RPS\AsgardPark-Common\Vibe\ParkingEntry\ParkingEntry.Application\obj\Debug\net8.0\ParkingEntry.Application.csproj.CoreCompileInputs.cache
