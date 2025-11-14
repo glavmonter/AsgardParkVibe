@@ -1,228 +1,294 @@
-# Parking Entry System
+# Система управления въездной стойкой парковки
 
-Система управления въездной стойкой парковки на базе C# и ASP.NET с использованием паттернов FSM (Finite State Machine) и Mediator.
+ASP.NET приложение на основе паттерна Mediator для управления конечным автоматом въездной стойки.
 
 ## Архитектура
 
-Проект использует гибридную архитектуру:
-- **FSM (State Machine)** - для управления состояниями въезда
-- **Mediator** - для слабой связанности между компонентами
-- **Clean Architecture** - разделение на слои Domain, Application, Infrastructure
-
-### Структура проекта
+### Основные компоненты
 
 ```
-ParkingEntry/
-├── ParkingEntry.Domain/          # Доменные сущности и события
-│   ├── Entities/                 # Сущности (Client, EntrySession, Card)
-│   ├── Enums/                    # Перечисления состояний
-│   └── Events/                   # Доменные события
-│
-├── ParkingEntry.Application/     # Бизнес-логика
-│   ├── StateMachine/             # Конечный автомат состояний
-│   ├── Services/                 # Команды и обработчики (Mediator)
-│   ├── Coordinators/             # Координаторы процессов
-│   └── Infrastructure/           # Инфраструктура приложения
-│
-├── ParkingEntry.Infrastructure/  # Внешние зависимости
-│   ├── Hardware/                 # Сервисы оборудования
-│   ├── Workers/                  # Фоновые задачи
-│   └── Repositories/             # Репозитории данных
-│
-└── ParkingEntry.Tests/           # Тесты
-    ├── Unit/                     # Модульные тесты
-    ├── Integration/              # Интеграционные тесты
-    └── Builders/                 # Test builders
+┌─────────────────────────────────────────────────────────────┐
+│                     ASP.NET API Layer                        │
+│  ┌────────────────────┐         ┌──────────────────────┐    │
+│  │  EntryController   │────────▶│   HTTP Endpoints     │    │
+│  └────────────────────┘         └──────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    MediatR Event Bus                         │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │  События (Notifications) + Команды (Requests)        │   │
+│  └──────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+                            │
+        ┌───────────────────┼───────────────────┐
+        ▼                   ▼                   ▼
+┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+│   Event      │   │   Command    │   │    State     │
+│  Handlers    │   │   Handlers   │   │   Context    │
+│              │   │              │   │  (Singleton) │
+└──────────────┘   └──────────────┘   └──────────────┘
+        │                   │
+        ▼                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Equipment Services                        │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
+│  │ Barrier  │  │  Light   │  │  Mifare  │  │  Access  │   │
+│  │ Service  │  │ Service  │  │ Service  │  │  Check   │   │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘   │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## Компоненты системы
+## Состояния системы
 
-### 1. State Machine (FSM)
-
-Управляет состояниями въездного процесса:
-
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> ReadingCard : VehicleApproached
+    ReadingCard --> CheckingAccess : CardRead
+    ReadingCard --> Idle : VehicleLeft
+    CheckingAccess --> OpeningBarrier : Access Allowed
+    CheckingAccess --> AccessDenied : Access Denied
+    OpeningBarrier --> WaitingPassage : Barrier Opened
+    WaitingPassage --> ClosingBarrier : VehiclePassed/Reversed
+    ClosingBarrier --> Idle : Barrier Closed
+    AccessDenied --> Idle : VehicleLeft
 ```
-Idle → ReadingCard → CheckingAccess → OpeningBarrier → WaitingPassage → Idle
-```
 
-**Состояния:**
-- `Idle` - Ожидание автомобиля
-- `ReadingCard` - Чтение карты Mifare
-- `CheckingAccess` - Проверка прав доступа
-- `OpeningBarrier` - Открытие шлагбаума
-- `WaitingPassage` - Ожидание проезда
-- `Error` - Ошибка оборудования
+### Состояния (EntryState)
 
-### 2. Mediator Pattern
+1. **Idle** - Ожидание автомобиля
+2. **ReadingCard** - Чтение карты
+3. **CheckingAccess** - Проверка прав доступа
+4. **OpeningBarrier** - Открытие шлагбаума
+5. **WaitingPassage** - Ожидание проезда
+6. **ClosingBarrier** - Закрытие шлагбаума
+7. **AccessDenied** - Доступ запрещен
+8. **EquipmentError** - Ошибка оборудования
 
-Используется библиотека `Mediator` для:
-- Изоляции команд оборудования
-- Слабой связанности компонентов
-- Упрощения тестирования
+## Ключевые особенности
 
-**Команды:**
-- `OpenBarrierCommand` / `CloseBarrierCommand`
-- `SwitchLightCommand`
-- `StartCardSearchCommand` / `StopCardSearchCommand`
-- `CheckAccessCommand`
-- `CalculateDebtCommand`
+### ✅ Singleton State Machine
+- Контекст состояния (IStateContext) - Singleton
+- Все события обрабатываются последовательно
+- Thread-safe через lock
 
-### 3. Hardware Services
+### ✅ Mediator Pattern
+- События (INotification) для асинхронных уведомлений
+- Команды (IRequest) для запросов к оборудованию
+- Слабая связанность компонентов
 
-**IBarrierService** - Управление шлагбаумом
+### ✅ Тестирование с любого состояния
 ```csharp
-Task<BarrierStatus> OpenAsync(CancellationToken ct);
-Task<BarrierStatus> CloseAsync(CancellationToken ct);
+// Можно начать тест с любого состояния!
+Setup(EntryState.WaitingPassage, cardNumber: "TEST123");
+await Mediator.Publish(new VehiclePassed());
+AssertState(EntryState.Idle);
 ```
 
-**ILightService** - Управление светофором
-```csharp
-Task<LightStatus> SwitchAsync(LightColor color, CancellationToken ct);
+### ✅ Mock-friendly
+Все зависимости - интерфейсы, легко мокаются в тестах
+
+## Установка и запуск
+
+### Требования
+- .NET 8.0 SDK
+- IDE: Visual Studio 2022 / Rider / VS Code
+
+### Запуск API
+
+```bash
+cd src/ParkingEntry.Api
+dotnet run
 ```
 
-**IMifareReaderService** - Чтение карт Mifare
-```csharp
-Task<MifareStatus> StartSearchAsync(CancellationToken ct);
-event EventHandler<CardRead>? CardRead;
+API будет доступен на `https://localhost:5001` (или HTTP порт из консоли)
+
+Swagger UI: `https://localhost:5001/swagger`
+
+### Запуск тестов
+
+```bash
+cd tests/ParkingEntry.Tests
+dotnet test
 ```
 
-**ISlaveWorker** - Низкоуровневое взаимодействие с оборудованием
-```csharp
-Task SendCommandAsync(string command, CancellationToken ct);
-event EventHandler? VehicleApproached;
-event EventHandler? VehiclePassed;
-event EventHandler? VehicleReversed;
+Или запустить все тесты из корня:
+
+```bash
+dotnet test
 ```
 
-### 4. Entry Coordinator
+## Использование API
 
-Оркестрирует весь процесс въезда:
-- Обрабатывает доменные события
-- Координирует переходы состояний
-- Управляет таймаутами
-- Проверяет доступ и задолженность
+### Получить текущий статус
 
-### 5. Timeout Manager
+```bash
+GET /api/entry/status
+```
 
-Управление таймаутами операций:
-- Таймаут чтения карты (30 сек)
-- Таймаут проезда (2 мин)
-- Автоматическая отмена при завершении операции
-
-## Пример работы системы
-
-1. **Автомобиль подъезжает** → `VehicleApproached`
-   - Светофор → Красный
-   - Начинается поиск карты
-   - Устанавливается таймаут 30 сек
-
-2. **Карта прочитана** → `CardRead`
-   - Отменяется таймаут
-   - Проверяются права доступа
-   - Проверяется задолженность
-
-3. **Доступ разрешен**
-   - Открывается шлагбаум
-   - Устанавливается таймаут проезда 2 мин
-
-4. **Автомобиль проехал** → `VehiclePassed` или `VehicleReversed`
-   - Закрывается шлагбаум
-   - Светофор → Зеленый
-   - Возврат в состояние `Idle`
-
-## Технологии
-
-- **.NET 8**
-- **Mediator** (с Source Generators)
-- **NUnit** - Фреймворк тестирования
-- **Moq** - Библиотека моков
-- **FluentAssertions** - Fluent API для assertions
-- **Entity Framework Core** (опционально для БД)
-
-## Тестирование
-
-### Unit Tests
-
-Изолированное тестирование каждого компонента:
-- `EntryStateMachineTests` - Тесты FSM
-- `AccessCheckHandlerTests` - Тесты проверки доступа
-- `BarrierCommandHandlerTests` - Тесты команд шлагбаума
-
-### Integration Tests
-
-Тестирование полного потока:
-```csharp
-[Test]
-public async Task FullEntryFlow_ValidClient_ShouldOpenAndCloseBarrier()
+Ответ:
+```json
 {
-    // Arrange: подготовка данных и моков
-    // Act: симуляция событий (VehicleApproached → CardRead → VehiclePassed)
-    // Assert: проверка что барьер открылся и закрылся
+  "currentState": "Idle",
+  "cardNumber": null,
+  "timestamp": "2025-01-15T10:30:00Z"
 }
 ```
 
-### Test Builders
+### Отправить событие "Автомобиль подъехал"
 
-Fluent API для создания тестовых данных:
-```csharp
-var client = ClientBuilder.Create()
-    .WithNumber("12345")
-    .WithActiveContract()
-    .NotBlocked()
-    .WithDebt(100.50m)
-    .Build();
+```bash
+POST /api/entry/events/vehicle-approached
 ```
 
-## Dependency Injection
+### Отправить событие "Карта прочитана"
 
-Регистрация сервисов в `Program.cs`:
+```bash
+POST /api/entry/events/card-read
+Content-Type: application/json
 
-```csharp
-// Mediator
-builder.Services.AddMediator();
-
-// State Machine
-builder.Services.AddSingleton<IEntryStateMachine, EntryStateMachine>();
-builder.Services.AddSingleton<ITimeoutManager, TimeoutManager>();
-builder.Services.AddSingleton<EntryCoordinator>();
-
-// Hardware Services
-builder.Services.AddSingleton<IBarrierService, BarrierService>();
-builder.Services.AddSingleton<ILightService, LightService>();
-builder.Services.AddSingleton<IMifareReaderService, MifareReaderService>();
-
-// Workers
-builder.Services.AddSingleton<ISlaveWorker, SlaveWorker>();
-builder.Services.AddHostedService<VehicleDetectorWorker>();
+{
+  "cardNumber": "CARD12345"
+}
 ```
 
-## Обработка ошибок
+### Сбросить систему
 
-### Health Status
+```bash
+POST /api/entry/reset
+```
 
-Оборудование генерирует события `EquipmentHealthChanged`:
-- `Healthy` - Нормальная работа
-- `Degraded` - Мягкий отказ (работает с ограничениями)
-- `Critical` - Критический отказ (переход в состояние `Error`)
+## Примеры сценариев
 
-### Таймауты
+### Успешный въезд
 
-Автоматическая обработка таймаутов:
-- При истечении таймаута чтения карты → возврат в `Idle`
-- При истечении таймаута проезда → закрытие шлагбаума и возврат в `Idle`
+```bash
+# 1. Автомобиль подъезжает
+curl -X POST https://localhost:5001/api/entry/events/vehicle-approached
+
+# 2. Карта прочитана
+curl -X POST https://localhost:5001/api/entry/events/card-read \
+  -H "Content-Type: application/json" \
+  -d '{"cardNumber": "VALID_CARD"}'
+
+# 3. Автомобиль проезжает
+curl -X POST https://localhost:5001/api/entry/events/vehicle-passed
+
+# Проверить статус
+curl https://localhost:5001/api/entry/status
+```
+
+### Отказ в доступе
+
+```bash
+# 1. Автомобиль подъезжает
+curl -X POST https://localhost:5001/api/entry/events/vehicle-approached
+
+# 2. Карта отклонена (номер "DENIED")
+curl -X POST https://localhost:5001/api/entry/events/card-read \
+  -H "Content-Type: application/json" \
+  -d '{"cardNumber": "DENIED"}'
+
+# 3. Автомобиль уезжает
+curl -X POST https://localhost:5001/api/entry/events/vehicle-left
+```
+
+## Структура проекта
+
+```
+ParkingEntry/
+├── src/
+│   ├── ParkingEntry.Core/          # Основная бизнес-логика
+│   │   ├── Domain/                 # Доменные модели и события
+│   │   │   ├── EntryState.cs
+│   │   │   ├── EquipmentStatus.cs
+│   │   │   └── Events/
+│   │   │       └── DomainEvents.cs
+│   │   ├── Application/            # Слой приложения
+│   │   │   ├── Commands/
+│   │   │   ├── Handlers/           # MediatR handlers
+│   │   │   ├── Services/           # Интерфейсы сервисов
+│   │   │   └── StateMachine/
+│   │   └── Infrastructure/         # Реализации
+│   │       ├── StateContext.cs
+│   │       └── TimeoutManager.cs
+│   └── ParkingEntry.Api/           # ASP.NET API
+│       ├── Controllers/
+│       │   └── EntryController.cs
+│       ├── Services/               # Mock-сервисы
+│       │   └── MockServices.cs
+│       └── Program.cs
+└── tests/
+    └── ParkingEntry.Tests/         # Unit-тесты
+        ├── EntryStateMachineTestBase.cs
+        ├── LightBehaviorTests.cs
+        ├── CardReaderTests.cs
+        ├── FinalStateTests.cs      # Тесты без начальных фаз
+        └── FullScenarioTests.cs
+```
+
+## Расширение системы
+
+### Добавление нового сервиса
+
+1. Создать интерфейс в `Core/Application/Services/`
+2. Создать команды в `Core/Application/Commands/`
+3. Создать handler в `Core/Application/Handlers/`
+4. Зарегистрировать в `Program.cs`
+
+### Добавление нового состояния
+
+1. Добавить в enum `EntryState`
+2. Создать event handler для перехода
+3. Добавить тесты
+
+### Добавление таймаутов
+
+```csharp
+// В обработчике
+var timerId = await _timeoutManager.StartTimerAsync(
+    "WriteCard",
+    TimeSpan.FromSeconds(10),
+    async () => {
+        await _mediator.Publish(new OperationTimeout("WriteCard"));
+    },
+    cancellationToken);
+
+// Отменить при успехе
+_timeoutManager.CancelTimer(timerId);
+```
 
 ## Преимущества архитектуры
 
-1. **Слабая связанность** - Компоненты изолированы через Mediator
-2. **Тестируемость** - Каждый компонент тестируется независимо
-3. **Расширяемость** - Легко добавить новые состояния или команды
-4. **Прозрачность** - FSM делает логику переходов явной
-5. **Надежность** - Встроенная обработка таймаутов и ошибок
+✅ **Разделение ответственности** - каждый handler отвечает за одно событие  
+✅ **Тестируемость** - можно тестировать с любого состояния  
+✅ **Расширяемость** - добавление функций не ломает существующий код  
+✅ **Читаемость** - явные события и команды вместо switch/if  
+✅ **Независимость** - слабая связанность через интерфейсы  
 
-## Следующие шаги
+## Режим "Выезд"
 
-- [ ] Реализация SlaveWorker для взаимодействия с железом
-- [ ] Добавление персистентности (Entity Framework Core)
-- [ ] Логирование событий в БД
-- [ ] Добавление веб-интерфейса мониторинга
-- [ ] Метрики и мониторинг состояний
+Для режима выезда можно:
+1. Создать отдельный `ExitController` и `ExitState`
+2. Переиспользовать те же сервисы оборудования
+3. Создать свои handlers для логики выезда
+4. Выбор режима через конфигурацию при запуске
+
+## Технологии
+
+- .NET 8.0
+- ASP.NET Core Minimal API
+- MediatR 12.4.1
+- NUnit 4.2.2
+- FluentAssertions 6.12.1
+- Moq 4.20.72
+
+## Авторы
+
+RPS Development Team
+
+## Лицензия
+
+Copyright (c) RPS. All rights reserved.

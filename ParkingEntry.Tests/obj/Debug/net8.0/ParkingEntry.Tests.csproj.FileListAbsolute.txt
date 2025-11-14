@@ -1,6 +1,0 @@
-D:\Projects\RPS\AsgardPark-Common\Vibe\ParkingEntry\ParkingEntry.Tests\bin\Debug\net8.0\CoverletSourceRootsMapping_ParkingEntry.Tests
-D:\Projects\RPS\AsgardPark-Common\Vibe\ParkingEntry\ParkingEntry.Tests\obj\Debug\net8.0\ParkingEntry.Tests.csproj.AssemblyReference.cache
-D:\Projects\RPS\AsgardPark-Common\Vibe\ParkingEntry\ParkingEntry.Tests\obj\Debug\net8.0\ParkingEntry.Tests.GeneratedMSBuildEditorConfig.editorconfig
-D:\Projects\RPS\AsgardPark-Common\Vibe\ParkingEntry\ParkingEntry.Tests\obj\Debug\net8.0\ParkingEntry.Tests.AssemblyInfoInputs.cache
-D:\Projects\RPS\AsgardPark-Common\Vibe\ParkingEntry\ParkingEntry.Tests\obj\Debug\net8.0\ParkingEntry.Tests.AssemblyInfo.cs
-D:\Projects\RPS\AsgardPark-Common\Vibe\ParkingEntry\ParkingEntry.Tests\obj\Debug\net8.0\ParkingEntry.Tests.csproj.CoreCompileInputs.cache
