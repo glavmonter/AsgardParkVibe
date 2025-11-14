@@ -1,294 +1,287 @@
-# Система управления въездной стойкой парковки
+# Parking Gate Control System
 
-ASP.NET приложение на основе паттерна Mediator для управления конечным автоматом въездной стойки.
+Система управления въездной стойкой парковки на базе Mediator паттерна с использованием MediatR.
 
 ## Архитектура
 
-### Основные компоненты
+Решение построено на Clean Architecture с разделением на слои:
+
+### Структура проекта
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     ASP.NET API Layer                        │
-│  ┌────────────────────┐         ┌──────────────────────┐    │
-│  │  EntryController   │────────▶│   HTTP Endpoints     │    │
-│  └────────────────────┘         └──────────────────────┘    │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    MediatR Event Bus                         │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  События (Notifications) + Команды (Requests)        │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-                            │
-        ┌───────────────────┼───────────────────┐
-        ▼                   ▼                   ▼
-┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│   Event      │   │   Command    │   │    State     │
-│  Handlers    │   │   Handlers   │   │   Context    │
-│              │   │              │   │  (Singleton) │
-└──────────────┘   └──────────────┘   └──────────────┘
-        │                   │
-        ▼                   ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Equipment Services                        │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
-│  │ Barrier  │  │  Light   │  │  Mifare  │  │  Access  │   │
-│  │ Service  │  │ Service  │  │ Service  │  │  Check   │   │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘   │
-└─────────────────────────────────────────────────────────────┘
+ParkingGate/
+├── ParkingGate.Domain/          # Доменные модели, события, команды
+│   ├── Models/                  # BarrierStatus, LightStatus, GateState
+│   ├── Events/                  # VehicleApproachedEvent, CardReadEvent
+│   ├── Commands/                # OpenBarrierCommand, SetLightColorCommand
+│   └── Queries/                 # GetGateStateQuery
+├── ParkingGate.Infrastructure/  # Реализация аппаратных интерфейсов
+│   ├── Hardware/                # ISlave, IMifareReader, Mock реализации
+│   └── Services/                # GateStateService
+├── ParkingGate.Application/     # Бизнес-логика и обработчики
+│   └── Handlers/
+│       ├── Commands/            # Обработчики команд
+│       ├── Events/              # Обработчики событий
+│       └── Queries/             # Обработчики запросов
+├── ParkingGate.Api/             # ASP.NET Core Web API
+│   └── Controllers/             # StatusController, SimulationController
+└── ParkingGate.Tests/           # NUnit тесты
+    └── Handlers/                # Тесты обработчиков
 ```
 
-## Состояния системы
+## Ключевые компоненты
 
-```mermaid
-stateDiagram-v2
-    [*] --> Idle
-    Idle --> ReadingCard : VehicleApproached
-    ReadingCard --> CheckingAccess : CardRead
-    ReadingCard --> Idle : VehicleLeft
-    CheckingAccess --> OpeningBarrier : Access Allowed
-    CheckingAccess --> AccessDenied : Access Denied
-    OpeningBarrier --> WaitingPassage : Barrier Opened
-    WaitingPassage --> ClosingBarrier : VehiclePassed/Reversed
-    ClosingBarrier --> Idle : Barrier Closed
-    AccessDenied --> Idle : VehicleLeft
+### События автомобиля
+
+- `VehicleApproachedEvent` - автомобиль подъехал к шлагбауму
+- `VehicleDepartedEvent` - автомобиль уехал от шлагбаума
+- `VehiclePassedThroughEvent` - автомобиль проехал через шлагбаум
+- `VehicleBackedOutEvent` - автомобиль заехал за шлагбаум, но уехал назад
+
+### События Mifare ридера
+
+- `CardReadEvent` - карта прочитана
+- `CardWrittenEvent` - карта записана
+- `HealthStatusChangedEvent` - изменился статус здоровья оборудования
+
+### Команды управления
+
+**Шлагбаум:**
+- `OpenBarrierCommand` - открыть шлагбаум
+- `CloseBarrierCommand` - закрыть шлагбаум
+
+**Светофор:**
+- `SetLightColorCommand` - переключить цвет (Red, Green, Both, None)
+
+**Mifare ридер:**
+- `StartSearchingCardCommand` - начать поиск карты
+- `StopSearchingCardCommand` - остановить поиск карты
+- `WriteCardCommand` - записать карту
+- `StopWritingCardCommand` - остановить запись карты
+
+**Бизнес-логика:**
+- `CheckAccessRightsCommand` - проверить права доступа
+- `CalculateDebtCommand` - посчитать задолженность
+
+### Сервисы
+
+- `IGateStateService` - централизованное хранение состояния ворот (singleton, thread-safe)
+- `ISlave` - интерфейс для управления шлагбаумом и светофором
+- `IMifareReader` - интерфейс для работы с Mifare картами
+
+## Алгоритм работы
+
+### Успешный въезд
+
+1. **Автомобиль подъезжает** (`VehicleApproachedEvent`)
+   - Светофор переключается на красный
+   - Начинается поиск карты
+
+2. **Карта прочитана** (`CardReadEvent`)
+   - Останавливается поиск карты
+   - Проверяются права доступа
+   - Если доступ разрешен → открывается шлагбаум
+   - Если доступ запрещен → шлагбаум остается закрытым
+
+3. **Автомобиль проехал** (`VehiclePassedThroughEvent`)
+   - Закрывается шлагбаум
+   - Светофор переключается на зеленый
+   - Система возвращается в состояние ожидания
+
+### Отмена въезда
+
+Если автомобиль уехал (`VehicleDepartedEvent` или `VehicleBackedOutEvent`):
+- Закрывается шлагбаум (если был открыт)
+- Светофор переключается на зеленый
+- Система возвращается в состояние ожидания
+
+## API Endpoints
+
+### Status Controller
+
+```
+GET /api/status          - Получить текущее состояние ворот
+GET /api/status/health   - Health check
 ```
 
-### Состояния (EntryState)
+### Simulation Controller
 
-1. **Idle** - Ожидание автомобиля
-2. **ReadingCard** - Чтение карты
-3. **CheckingAccess** - Проверка прав доступа
-4. **OpeningBarrier** - Открытие шлагбаума
-5. **WaitingPassage** - Ожидание проезда
-6. **ClosingBarrier** - Закрытие шлагбаума
-7. **AccessDenied** - Доступ запрещен
-8. **EquipmentError** - Ошибка оборудования
-
-## Ключевые особенности
-
-### ✅ Singleton State Machine
-- Контекст состояния (IStateContext) - Singleton
-- Все события обрабатываются последовательно
-- Thread-safe через lock
-
-### ✅ Mediator Pattern
-- События (INotification) для асинхронных уведомлений
-- Команды (IRequest) для запросов к оборудованию
-- Слабая связанность компонентов
-
-### ✅ Тестирование с любого состояния
-```csharp
-// Можно начать тест с любого состояния!
-Setup(EntryState.WaitingPassage, cardNumber: "TEST123");
-await Mediator.Publish(new VehiclePassed());
-AssertState(EntryState.Idle);
+```
+POST /api/simulation/vehicle/approached      - Имитация подъезда автомобиля
+POST /api/simulation/vehicle/departed        - Имитация отъезда автомобиля
+POST /api/simulation/vehicle/passed-through  - Имитация проезда автомобиля
+POST /api/simulation/vehicle/backed-out      - Имитация движения назад
+POST /api/simulation/card/read              - Имитация чтения карты
+  Body: { "cardNumber": "1234" }
 ```
 
-### ✅ Mock-friendly
-Все зависимости - интерфейсы, легко мокаются в тестах
-
-## Установка и запуск
+## Запуск
 
 ### Требования
+
 - .NET 8.0 SDK
-- IDE: Visual Studio 2022 / Rider / VS Code
+- Visual Studio 2022 / JetBrains Rider / VS Code
 
 ### Запуск API
 
 ```bash
-cd src/ParkingEntry.Api
+cd ParkingGate.Api
 dotnet run
 ```
 
-API будет доступен на `https://localhost:5001` (или HTTP порт из консоли)
+API будет доступен по адресу: `https://localhost:7001` (или `http://localhost:5001`)
 
-Swagger UI: `https://localhost:5001/swagger`
+Swagger UI: `https://localhost:7001/swagger`
 
 ### Запуск тестов
 
 ```bash
-cd tests/ParkingEntry.Tests
+cd ParkingGate.Tests
 dotnet test
 ```
 
-Или запустить все тесты из корня:
+## Примеры использования
+
+### 1. Проверка состояния системы
 
 ```bash
-dotnet test
-```
-
-## Использование API
-
-### Получить текущий статус
-
-```bash
-GET /api/entry/status
+curl https://localhost:7001/api/status
 ```
 
 Ответ:
 ```json
 {
-  "currentState": "Idle",
-  "cardNumber": null,
-  "timestamp": "2025-01-15T10:30:00Z"
+  "mode": "Entry",
+  "barrierStatus": "Closed",
+  "lightStatus": "Green",
+  "mifareStatus": "Idle",
+  "systemHealth": "Healthy",
+  "lastError": null,
+  "lastUpdate": "2025-11-13T10:30:00Z",
+  "currentStateName": "WaitingForVehicle"
 }
 ```
 
-### Отправить событие "Автомобиль подъехал"
+### 2. Имитация полного сценария въезда
 
 ```bash
-POST /api/entry/events/vehicle-approached
-```
+# Шаг 1: Автомобиль подъезжает
+curl -X POST https://localhost:7001/api/simulation/vehicle/approached
 
-### Отправить событие "Карта прочитана"
-
-```bash
-POST /api/entry/events/card-read
-Content-Type: application/json
-
-{
-  "cardNumber": "CARD12345"
-}
-```
-
-### Сбросить систему
-
-```bash
-POST /api/entry/reset
-```
-
-## Примеры сценариев
-
-### Успешный въезд
-
-```bash
-# 1. Автомобиль подъезжает
-curl -X POST https://localhost:5001/api/entry/events/vehicle-approached
-
-# 2. Карта прочитана
-curl -X POST https://localhost:5001/api/entry/events/card-read \
+# Шаг 2: Карта читается (автоматически через 2-5 секунд)
+# ИЛИ можно имитировать вручную:
+curl -X POST https://localhost:7001/api/simulation/card/read \
   -H "Content-Type: application/json" \
-  -d '{"cardNumber": "VALID_CARD"}'
+  -d '{"cardNumber": "1234"}'
 
-# 3. Автомобиль проезжает
-curl -X POST https://localhost:5001/api/entry/events/vehicle-passed
+# Шаг 3: Автомобиль проехал
+curl -X POST https://localhost:7001/api/simulation/vehicle/passed-through
 
-# Проверить статус
-curl https://localhost:5001/api/entry/status
+# Проверка состояния
+curl https://localhost:7001/api/status
 ```
 
-### Отказ в доступе
+### 3. Сценарий отказа в доступе
 
 ```bash
-# 1. Автомобиль подъезжает
-curl -X POST https://localhost:5001/api/entry/events/vehicle-approached
+# Автомобиль подъезжает
+curl -X POST https://localhost:7001/api/simulation/vehicle/approached
 
-# 2. Карта отклонена (номер "DENIED")
-curl -X POST https://localhost:5001/api/entry/events/card-read \
+# Карта с отказом (номер не начинается с "1")
+curl -X POST https://localhost:7001/api/simulation/card/read \
   -H "Content-Type: application/json" \
-  -d '{"cardNumber": "DENIED"}'
+  -d '{"cardNumber": "9999"}'
 
-# 3. Автомобиль уезжает
-curl -X POST https://localhost:5001/api/entry/events/vehicle-left
+# Автомобиль уезжает
+curl -X POST https://localhost:7001/api/simulation/vehicle/departed
 ```
 
-## Структура проекта
+## Тестирование
 
-```
-ParkingEntry/
-├── src/
-│   ├── ParkingEntry.Core/          # Основная бизнес-логика
-│   │   ├── Domain/                 # Доменные модели и события
-│   │   │   ├── EntryState.cs
-│   │   │   ├── EquipmentStatus.cs
-│   │   │   └── Events/
-│   │   │       └── DomainEvents.cs
-│   │   ├── Application/            # Слой приложения
-│   │   │   ├── Commands/
-│   │   │   ├── Handlers/           # MediatR handlers
-│   │   │   ├── Services/           # Интерфейсы сервисов
-│   │   │   └── StateMachine/
-│   │   └── Infrastructure/         # Реализации
-│   │       ├── StateContext.cs
-│   │       └── TimeoutManager.cs
-│   └── ParkingEntry.Api/           # ASP.NET API
-│       ├── Controllers/
-│       │   └── EntryController.cs
-│       ├── Services/               # Mock-сервисы
-│       │   └── MockServices.cs
-│       └── Program.cs
-└── tests/
-    └── ParkingEntry.Tests/         # Unit-тесты
-        ├── EntryStateMachineTestBase.cs
-        ├── LightBehaviorTests.cs
-        ├── CardReaderTests.cs
-        ├── FinalStateTests.cs      # Тесты без начальных фаз
-        └── FullScenarioTests.cs
-```
+Проект включает три набора тестов:
+
+### 1. TrafficLightBehaviorTests
+
+Проверяет поведение светофора:
+- Красный при подъезде автомобиля
+- Зеленый при уезде, проезде или движении назад
+
+### 2. CardSearchBehaviorTests
+
+Проверяет включение поиска карты при подъезде автомобиля.
+
+### 3. FullEntryScenarioTests
+
+Интеграционные тесты полных сценариев:
+- Успешный въезд с доступом
+- Отказ в доступе
+- Последовательность переходов состояний
+
+## Особенности реализации
+
+### Thread-Safe State Management
+
+`GateStateService` использует `lock` для обеспечения потокобезопасности при обновлении состояния из разных обработчиков.
+
+### Singleton FSM
+
+Конечный автомат работает как singleton - все события обрабатываются последовательно через MediatR.
+
+### Mock Hardware
+
+Для разработки и тестирования используются mock реализации:
+- `MockSlave` - имитирует работу с шлагбаумом и светофором
+- `MockMifareReader` - имитирует чтение карт (автоматически через 2-5 секунд)
+
+### Режимы работы
+
+Система поддерживает два режима (через `GateMode` enum):
+- `Entry` - въездная стойка (реализован)
+- `Exit` - выездная стойка (для будущей реализации)
 
 ## Расширение системы
 
-### Добавление нового сервиса
+### Добавление новых состояний
 
-1. Создать интерфейс в `Core/Application/Services/`
-2. Создать команды в `Core/Application/Commands/`
-3. Создать handler в `Core/Application/Handlers/`
-4. Зарегистрировать в `Program.cs`
+1. Создайте новое событие в `Domain/Events`
+2. Создайте обработчик в `Application/Handlers/Events`
+3. Обновите `GateStateService` при необходимости
+4. Добавьте тесты
 
-### Добавление нового состояния
+### Подключение реального оборудования
 
-1. Добавить в enum `EntryState`
-2. Создать event handler для перехода
-3. Добавить тесты
+Замените mock реализации на реальные:
+
+```csharp
+// В Program.cs замените:
+builder.Services.AddSingleton<ISlave, RealSlaveImplementation>();
+builder.Services.AddSingleton<IMifareReader, RealMifareReaderImplementation>();
+```
 
 ### Добавление таймаутов
 
-```csharp
-// В обработчике
-var timerId = await _timeoutManager.StartTimerAsync(
-    "WriteCard",
-    TimeSpan.FromSeconds(10),
-    async () => {
-        await _mediator.Publish(new OperationTimeout("WriteCard"));
-    },
-    cancellationToken);
+Для реализации таймаутов можно использовать `CancellationTokenSource`:
 
-// Отменить при успехе
-_timeoutManager.CancelTimer(timerId);
+```csharp
+var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+try 
+{
+    await _mediator.Send(command, cts.Token);
+}
+catch (OperationCanceledException)
+{
+    // Обработка таймаута
+}
 ```
 
-## Преимущества архитектуры
+## Зависимости
 
-✅ **Разделение ответственности** - каждый handler отвечает за одно событие  
-✅ **Тестируемость** - можно тестировать с любого состояния  
-✅ **Расширяемость** - добавление функций не ломает существующий код  
-✅ **Читаемость** - явные события и команды вместо switch/if  
-✅ **Независимость** - слабая связанность через интерфейсы  
-
-## Режим "Выезд"
-
-Для режима выезда можно:
-1. Создать отдельный `ExitController` и `ExitState`
-2. Переиспользовать те же сервисы оборудования
-3. Создать свои handlers для логики выезда
-4. Выбор режима через конфигурацию при запуске
-
-## Технологии
-
-- .NET 8.0
-- ASP.NET Core Minimal API
-- MediatR 12.4.1
-- NUnit 4.2.2
-- FluentAssertions 6.12.1
-- Moq 4.20.72
-
-## Авторы
-
-RPS Development Team
+- **MediatR** - паттерн Mediator
+- **FluentAssertions** - читаемые assertions в тестах
+- **NUnit** - тестовый фреймворк
+- **Moq** - мок-объекты для тестов
+- **Swashbuckle** - Swagger/OpenAPI документация
 
 ## Лицензия
 
-Copyright (c) RPS. All rights reserved.
+MIT
