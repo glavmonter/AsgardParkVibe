@@ -5,6 +5,7 @@
 using FluentAssertions;
 using Moq;
 using NUnit.Framework;
+using ParkingEntry.Core.Application.Services;
 using ParkingEntry.Core.Domain;
 using ParkingEntry.Core.Domain.Events;
 
@@ -21,7 +22,7 @@ public class FinalStateTests : EntryStateMachineTestBase
     {
         // Arrange - СРАЗУ начинаем с состояния WaitingPassage
         // Имитируем что автомобиль уже получил доступ и ждет проезда
-        Setup(EntryState.WaitingPassage, cardNumber: "VALID_CARD_123");
+        Setup(EntryState.WaitingPassage, initialCardNumber: "VALID_CARD_123");
 
         // Act - автомобиль проезжает
         await Mediator.Publish(new VehiclePassed());
@@ -50,7 +51,7 @@ public class FinalStateTests : EntryStateMachineTestBase
     public async Task VehicleReversed_FromWaitingPassage_ShouldCompleteSuccessfully()
     {
         // Arrange - СРАЗУ начинаем с состояния WaitingPassage
-        Setup(EntryState.WaitingPassage, cardNumber: "ANOTHER_CARD_456");
+        Setup(EntryState.WaitingPassage, initialCardNumber: "ANOTHER_CARD_456");
 
         // Act - автомобиль уехал назад
         await Mediator.Publish(new VehicleReversed());
@@ -80,7 +81,7 @@ public class FinalStateTests : EntryStateMachineTestBase
     {
         // Arrange - СРАЗУ начинаем с состояния AccessDenied
         // Имитируем что карта была отклонена
-        Setup(EntryState.AccessDenied, cardNumber: "DENIED_CARD");
+        Setup(EntryState.AccessDenied, initialCardNumber: "DENIED_CARD");
 
         // Act - автомобиль уезжает
         await Mediator.Publish(new VehicleLeft());
@@ -103,14 +104,14 @@ public class FinalStateTests : EntryStateMachineTestBase
     public async Task ClosingBarrier_AfterVehiclePassed_ShouldTransitionCorrectly()
     {
         // Arrange - начинаем с WaitingPassage
-        Setup(EntryState.WaitingPassage, cardNumber: "TEST_CARD");
+        Setup(EntryState.WaitingPassage, initialCardNumber: "TEST_CARD");
 
         // Act
         await Mediator.Publish(new VehiclePassed());
 
         // Assert - проверяем последовательность вызовов
         var invocations = BarrierServiceMock.Invocations
-            .Where(i => i.Method.Name == nameof(IBarrierService.CloseAsync))
+            .Where(i => i.Method.Name == nameof(IBarrierService))
             .ToList();
 
         invocations.Should().HaveCount(1, "Шлагбаум должен быть закрыт ровно один раз");
@@ -123,7 +124,7 @@ public class FinalStateTests : EntryStateMachineTestBase
     public async Task MultipleVehiclePassed_FromWaitingPassage_OnlyFirstShouldProcess()
     {
         // Arrange - начинаем с WaitingPassage
-        Setup(EntryState.WaitingPassage, cardNumber: "CARD999");
+        Setup(EntryState.WaitingPassage, initialCardNumber: "CARD999");
 
         // Act - отправляем событие дважды
         await Mediator.Publish(new VehiclePassed());
@@ -144,7 +145,7 @@ public class FinalStateTests : EntryStateMachineTestBase
     {
         // Arrange - начинаем с WaitingPassage БЕЗ номера карты
         // (необычный сценарий, но система должна быть устойчива)
-        Setup(EntryState.WaitingPassage, cardNumber: null);
+        Setup(EntryState.WaitingPassage, initialCardNumber: null);
 
         // Act
         await Mediator.Publish(new VehiclePassed());
@@ -161,7 +162,7 @@ public class FinalStateTests : EntryStateMachineTestBase
     public async Task StateTransitions_FromWaitingToIdle_ShouldCleanUpCorrectly()
     {
         // Arrange
-        Setup(EntryState.WaitingPassage, cardNumber: "CLEANUP_TEST");
+        Setup(EntryState.WaitingPassage, initialCardNumber: "CLEANUP_TEST");
 
         // Act
         await Mediator.Publish(new VehicleReversed());
