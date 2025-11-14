@@ -1,294 +1,161 @@
-# Система управления въездной стойкой парковки
+# MediatR State Machine Example
 
-ASP.NET приложение на основе паттерна Mediator для управления конечным автоматом въездной стойки.
+Пример приложения на C# с использованием паттерна Mediator (MediatR), тремя Hosted Services и конечным автоматом (State Machine) с пятью состояниями.
 
 ## Архитектура
 
-### Основные компоненты
+### Конечный автомат (OrderStateMachine)
 
+**5 состояний:**
+1. **Created** - заказ создан
+2. **Validated** - заказ провалидирован
+3. **Processing** - заказ в обработке
+4. **Completed** - заказ выполнен
+5. **Failed** - заказ провален
+
+**Переходы между состояниями:**
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     ASP.NET API Layer                        │
-│  ┌────────────────────┐         ┌──────────────────────┐    │
-│  │  EntryController   │────────▶│   HTTP Endpoints     │    │
-│  └────────────────────┘         └──────────────────────┘    │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    MediatR Event Bus                         │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  События (Notifications) + Команды (Requests)        │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-                            │
-        ┌───────────────────┼───────────────────┐
-        ▼                   ▼                   ▼
-┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│   Event      │   │   Command    │   │    State     │
-│  Handlers    │   │   Handlers   │   │   Context    │
-│              │   │              │   │  (Singleton) │
-└──────────────┘   └──────────────┘   └──────────────┘
-        │                   │
-        ▼                   ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Equipment Services                        │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
-│  │ Barrier  │  │  Light   │  │  Mifare  │  │  Access  │   │
-│  │ Service  │  │ Service  │  │ Service  │  │  Check   │   │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘   │
-└─────────────────────────────────────────────────────────────┘
+Created ---[ValidationSucceeded]---> Validated
+Created ---[ValidationFailed]------> Failed
+Validated ---[ProcessingStarted]---> Processing
+Processing ---[ProcessingCompleted]-> Completed
+Processing ---[ProcessingFailed]---> Failed
+Failed ---[Reset]-------------------> Created
+Completed ---[Reset]----------------> Created
 ```
 
-## Состояния системы
+### Hosted Services
 
-```mermaid
-stateDiagram-v2
-    [*] --> Idle
-    Idle --> ReadingCard : VehicleApproached
-    ReadingCard --> CheckingAccess : CardRead
-    ReadingCard --> Idle : VehicleLeft
-    CheckingAccess --> OpeningBarrier : Access Allowed
-    CheckingAccess --> AccessDenied : Access Denied
-    OpeningBarrier --> WaitingPassage : Barrier Opened
-    WaitingPassage --> ClosingBarrier : VehiclePassed/Reversed
-    ClosingBarrier --> Idle : Barrier Closed
-    AccessDenied --> Idle : VehicleLeft
-```
+1. **OrderCreationService** 
+   - Создает новые заказы каждые 3-5 секунд
+   - Отправляет команду `CreateOrderCommand` через MediatR
 
-### Состояния (EntryState)
+2. **OrderValidationService**
+   - Отслеживает заказы в состоянии `Created`
+   - Валидирует их (с вероятностью успеха 85%)
+   - Отправляет команду `ValidateOrderCommand`
 
-1. **Idle** - Ожидание автомобиля
-2. **ReadingCard** - Чтение карты
-3. **CheckingAccess** - Проверка прав доступа
-4. **OpeningBarrier** - Открытие шлагбаума
-5. **WaitingPassage** - Ожидание проезда
-6. **ClosingBarrier** - Закрытие шлагбаума
-7. **AccessDenied** - Доступ запрещен
-8. **EquipmentError** - Ошибка оборудования
+3. **OrderProcessingService**
+   - Отслеживает заказы в состоянии `Validated`
+   - Обрабатывает их (с вероятностью успеха 90%)
+   - Отправляет команду `ProcessOrderCommand`
 
-## Ключевые особенности
+4. **StatisticsService** (бонус)
+   - Выводит статистику по состояниям каждые 10 секунд
 
-### ✅ Singleton State Machine
-- Контекст состояния (IStateContext) - Singleton
-- Все события обрабатываются последовательно
-- Thread-safe через lock
+### MediatR команды и уведомления
 
-### ✅ Mediator Pattern
-- События (INotification) для асинхронных уведомлений
-- Команды (IRequest) для запросов к оборудованию
-- Слабая связанность компонентов
+**Команды (IRequest):**
+- `CreateOrderCommand` - создание заказа
+- `ValidateOrderCommand` - валидация заказа
+- `ProcessOrderCommand` - обработка заказа
 
-### ✅ Тестирование с любого состояния
-```csharp
-// Можно начать тест с любого состояния!
-Setup(EntryState.WaitingPassage, cardNumber: "TEST123");
-await Mediator.Publish(new VehiclePassed());
-AssertState(EntryState.Idle);
-```
-
-### ✅ Mock-friendly
-Все зависимости - интерфейсы, легко мокаются в тестах
-
-## Установка и запуск
-
-### Требования
-- .NET 8.0 SDK
-- IDE: Visual Studio 2022 / Rider / VS Code
-
-### Запуск API
-
-```bash
-cd src/ParkingEntry.Api
-dotnet run
-```
-
-API будет доступен на `https://localhost:5001` (или HTTP порт из консоли)
-
-Swagger UI: `https://localhost:5001/swagger`
-
-### Запуск тестов
-
-```bash
-cd tests/ParkingEntry.Tests
-dotnet test
-```
-
-Или запустить все тесты из корня:
-
-```bash
-dotnet test
-```
-
-## Использование API
-
-### Получить текущий статус
-
-```bash
-GET /api/entry/status
-```
-
-Ответ:
-```json
-{
-  "currentState": "Idle",
-  "cardNumber": null,
-  "timestamp": "2025-01-15T10:30:00Z"
-}
-```
-
-### Отправить событие "Автомобиль подъехал"
-
-```bash
-POST /api/entry/events/vehicle-approached
-```
-
-### Отправить событие "Карта прочитана"
-
-```bash
-POST /api/entry/events/card-read
-Content-Type: application/json
-
-{
-  "cardNumber": "CARD12345"
-}
-```
-
-### Сбросить систему
-
-```bash
-POST /api/entry/reset
-```
-
-## Примеры сценариев
-
-### Успешный въезд
-
-```bash
-# 1. Автомобиль подъезжает
-curl -X POST https://localhost:5001/api/entry/events/vehicle-approached
-
-# 2. Карта прочитана
-curl -X POST https://localhost:5001/api/entry/events/card-read \
-  -H "Content-Type: application/json" \
-  -d '{"cardNumber": "VALID_CARD"}'
-
-# 3. Автомобиль проезжает
-curl -X POST https://localhost:5001/api/entry/events/vehicle-passed
-
-# Проверить статус
-curl https://localhost:5001/api/entry/status
-```
-
-### Отказ в доступе
-
-```bash
-# 1. Автомобиль подъезжает
-curl -X POST https://localhost:5001/api/entry/events/vehicle-approached
-
-# 2. Карта отклонена (номер "DENIED")
-curl -X POST https://localhost:5001/api/entry/events/card-read \
-  -H "Content-Type: application/json" \
-  -d '{"cardNumber": "DENIED"}'
-
-# 3. Автомобиль уезжает
-curl -X POST https://localhost:5001/api/entry/events/vehicle-left
-```
+**Уведомления (INotification):**
+- `OrderCreatedNotification` - заказ создан
+- `OrderValidatedNotification` - заказ провалидирован
+- `OrderProcessedNotification` - заказ обработан
 
 ## Структура проекта
 
 ```
-ParkingEntry/
-├── src/
-│   ├── ParkingEntry.Core/          # Основная бизнес-логика
-│   │   ├── Domain/                 # Доменные модели и события
-│   │   │   ├── EntryState.cs
-│   │   │   ├── EquipmentStatus.cs
-│   │   │   └── Events/
-│   │   │       └── DomainEvents.cs
-│   │   ├── Application/            # Слой приложения
-│   │   │   ├── Commands/
-│   │   │   ├── Handlers/           # MediatR handlers
-│   │   │   ├── Services/           # Интерфейсы сервисов
-│   │   │   └── StateMachine/
-│   │   └── Infrastructure/         # Реализации
-│   │       ├── StateContext.cs
-│   │       └── TimeoutManager.cs
-│   └── ParkingEntry.Api/           # ASP.NET API
-│       ├── Controllers/
-│       │   └── EntryController.cs
-│       ├── Services/               # Mock-сервисы
-│       │   └── MockServices.cs
-│       └── Program.cs
-└── tests/
-    └── ParkingEntry.Tests/         # Unit-тесты
-        ├── EntryStateMachineTestBase.cs
-        ├── LightBehaviorTests.cs
-        ├── CardReaderTests.cs
-        ├── FinalStateTests.cs      # Тесты без начальных фаз
-        └── FullScenarioTests.cs
+MediatorStateMachine/
+├── StateMachine/
+│   ├── OrderStateDefinitions.cs    # Перечисления состояний и событий
+│   └── OrderStateMachine.cs        # Конечный автомат (Singleton)
+├── Commands/
+│   ├── OrderCommands.cs            # Определения команд и уведомлений
+│   ├── OrderCommandHandlers.cs     # Обработчики команд
+│   └── OrderNotificationHandlers.cs # Обработчики уведомлений
+├── HostedServices/
+│   ├── OrderCreationService.cs     # Сервис создания заказов
+│   ├── OrderValidationService.cs   # Сервис валидации
+│   ├── OrderProcessingService.cs   # Сервис обработки
+│   └── StatisticsService.cs        # Сервис статистики
+└── Program.cs                      # Точка входа и регистрация сервисов
+
+MediatorStateMachine.Tests/
+├── OrderStateMachineTests.cs       # Тесты конечного автомата
+└── CommandHandlersTests.cs         # Тесты обработчиков команд
 ```
 
-## Расширение системы
+## Запуск
 
-### Добавление нового сервиса
+### Требования
+- .NET 8.0 SDK
 
-1. Создать интерфейс в `Core/Application/Services/`
-2. Создать команды в `Core/Application/Commands/`
-3. Создать handler в `Core/Application/Handlers/`
-4. Зарегистрировать в `Program.cs`
-
-### Добавление нового состояния
-
-1. Добавить в enum `EntryState`
-2. Создать event handler для перехода
-3. Добавить тесты
-
-### Добавление таймаутов
-
-```csharp
-// В обработчике
-var timerId = await _timeoutManager.StartTimerAsync(
-    "WriteCard",
-    TimeSpan.FromSeconds(10),
-    async () => {
-        await _mediator.Publish(new OperationTimeout("WriteCard"));
-    },
-    cancellationToken);
-
-// Отменить при успехе
-_timeoutManager.CancelTimer(timerId);
+### Восстановление зависимостей и сборка
+```bash
+dotnet restore
+dotnet build
 ```
 
-## Преимущества архитектуры
+### Запуск приложения
+```bash
+dotnet run --project MediatorStateMachine
+```
 
-✅ **Разделение ответственности** - каждый handler отвечает за одно событие  
-✅ **Тестируемость** - можно тестировать с любого состояния  
-✅ **Расширяемость** - добавление функций не ломает существующий код  
-✅ **Читаемость** - явные события и команды вместо switch/if  
-✅ **Независимость** - слабая связанность через интерфейсы  
+### Запуск тестов
+```bash
+dotnet test
+```
 
-## Режим "Выезд"
+## Пример вывода
 
-Для режима выезда можно:
-1. Создать отдельный `ExitController` и `ExitState`
-2. Переиспользовать те же сервисы оборудования
-3. Создать свои handlers для логики выезда
-4. Выбор режима через конфигурацию при запуске
+```
+📦 ORDER CREATED: ORD-0001 | Customer: Customer-42 | Amount: $156.78
+✅ ORDER VALIDATED: ORD-0001 | Status: VALID
+🎉 ORDER COMPLETED: ORD-0001 | Message: Order processed successfully
+
+═══════════════════════════════════════
+📊 STATE STATISTICS:
+   🆕 Created: 2
+   ✅ Validated: 1
+   ⚙️  Processing: 0
+   🎉 Completed: 5
+   ❌ Failed: 3
+   📦 TOTAL: 11
+═══════════════════════════════════════
+```
+
+## Тесты
+
+Тестовый проект включает:
+
+### OrderStateMachineTests
+- ✅ Создание заказов
+- ✅ Переходы между всеми состояниями
+- ✅ Проверка недопустимых переходов
+- ✅ Полный жизненный цикл заказа
+- ✅ Функция Reset
+- ✅ Вспомогательные методы (CanTransition, GetOrdersInState, GetStateStatistics)
+- ✅ Потокобезопасность
+- ✅ Граничные случаи
+
+### CommandHandlersTests
+- ✅ Обработчики команд CreateOrder, ValidateOrder, ProcessOrder
+- ✅ Публикация уведомлений через MediatR
+- ✅ Проверка корректности состояний
+- ✅ Интеграционные тесты полного цикла
+
+Всего: **30+ тестов**
+
+## Особенности реализации
+
+1. **Thread-Safety**: OrderStateMachine использует `SemaphoreSlim` для потокобезопасности
+2. **Singleton**: StateMachine зарегистрирован как Singleton для разделения состояния между сервисами
+3. **Scoped Services**: Каждый HostedService создает scope для получения доступа к MediatR
+4. **Async/Await**: Все операции асинхронные
+5. **Structured Logging**: Используется ILogger с структурированными сообщениями
+6. **CQRS Pattern**: Разделение команд (Commands) и запросов
 
 ## Технологии
 
 - .NET 8.0
-- ASP.NET Core Minimal API
-- MediatR 12.4.1
-- NUnit 4.2.2
-- FluentAssertions 6.12.1
-- Moq 4.20.72
-
-## Авторы
-
-RPS Development Team
+- MediatR 12.2.0
+- Microsoft.Extensions.Hosting 8.0.0
+- NUnit 4.0.1
+- Moq 4.20.70
 
 ## Лицензия
 
-Copyright (c) RPS. All rights reserved.
+MIT

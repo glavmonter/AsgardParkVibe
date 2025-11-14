@@ -1,0 +1,1 @@
+namespace MediatorStateMachine.StateMachine; public enum OrderState { Created, Validated, Processing, Completed, Failed } public enum OrderEvent { ValidationSucceeded, ValidationFailed, ProcessingStarted, ProcessingCompleted, ProcessingFailed, Reset }
