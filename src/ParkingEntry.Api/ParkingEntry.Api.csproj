@@ -12,7 +12,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ParkingEntry.Core\ParkingEntry.Core.csproj" />
+    <ProjectReference Include="..\..\stateless-version\ParkingEntry.Core.Stateless\ParkingEntry.Core.Stateless.csproj" />
+    <ProjectReference Include="..\..\stateless-version\ParkingEntry.Tests.Stateless\ParkingEntry.Tests.Stateless.csproj" />
   </ItemGroup>
 
 </Project>
